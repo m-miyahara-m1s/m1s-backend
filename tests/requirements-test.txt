@@ -1,0 +1,5 @@
+# Test requirements for the member info update job
+pytest>=7.2.0
+pytest-mock>=3.10.0
+pyspark>=3.3.0
+moto>=4.0.0  # for mocking AWS services

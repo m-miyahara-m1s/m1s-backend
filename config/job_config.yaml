@@ -1,0 +1,72 @@
+# Configuration for Member Info Update Job
+# メンバー情報最新化ジョブ用設定
+
+# AWS Configuration
+aws:
+  region: ap-northeast-1
+  glue_role: arn:aws:iam::ACCOUNT_ID:role/GlueServiceRole
+  
+# Job Configuration
+job:
+  name: member-info-update-job
+  description: "メンバー情報を最新化するGlueジョブ"
+  glue_version: "4.0"
+  worker_type: "G.1X"
+  number_of_workers: 2
+  timeout: 60  # minutes
+  max_retries: 1
+  
+# Data Sources
+sources:
+  member_csv:
+    type: s3
+    path: s3://m1s-data-bucket/input/members/
+    format: csv
+    headers: true
+    
+  member_database:
+    type: jdbc
+    url: jdbc:postgresql://rds-endpoint:5432/m1s_db
+    table: members
+    user: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+# Destinations  
+destinations:
+  processed_data:
+    type: s3
+    path: s3://m1s-data-bucket/processed/members/
+    format: parquet
+    partition_keys:
+      - status
+      - updated_date
+      
+  member_table:
+    type: jdbc
+    url: jdbc:postgresql://rds-endpoint:5432/m1s_db
+    table: members_processed
+    user: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+# Data Validation Rules
+validation:
+  required_fields:
+    - member_id
+    - name
+    - email
+    
+  data_quality_checks:
+    - check_duplicate_member_ids
+    - validate_email_format
+    - check_required_fields
+    
+# Monitoring
+monitoring:
+  cloudwatch_log_group: /aws/glue/member-info-update
+  sns_topic_arn: arn:aws:sns:ap-northeast-1:ACCOUNT_ID:glue-job-notifications
+  
+# Retry Configuration
+retry:
+  max_attempts: 3
+  backoff_multiplier: 2
+  initial_delay: 60  # seconds
