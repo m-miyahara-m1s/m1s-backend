@@ -1,0 +1,207 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AWS Glue Job for Member Information Update (メンバー情報最新化ジョブ)",
+  "Parameters": {
+    "GlueScriptBucket": {
+      "Type": "String",
+      "Description": "S3 bucket for Glue scripts",
+      "Default": "m1s-glue-scripts"
+    },
+    "DataBucket": {
+      "Type": "String", 
+      "Description": "S3 bucket for data storage",
+      "Default": "m1s-data-bucket"
+    },
+    "JobName": {
+      "Type": "String",
+      "Description": "Name of the Glue job",
+      "Default": "member-info-update-job"
+    }
+  },
+  "Resources": {
+    "GlueServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "glue.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "GlueJobS3Access",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${GlueScriptBucket}/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${DataBucket}/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${GlueScriptBucket}"
+                    },
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${DataBucket}"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": "arn:aws:logs:*:*:/aws/glue/*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "MemberInfoUpdateJob": {
+      "Type": "AWS::Glue::Job",
+      "Properties": {
+        "Name": {
+          "Ref": "JobName"
+        },
+        "Role": {
+          "Fn::GetAtt": ["GlueServiceRole", "Arn"]
+        },
+        "Command": {
+          "Name": "glueetl",
+          "ScriptLocation": {
+            "Fn::Sub": "s3://${GlueScriptBucket}/member_info_update.py"
+          },
+          "PythonVersion": "3"
+        },
+        "DefaultArguments": {
+          "--job-language": "python",
+          "--job-bookmark-option": "job-bookmark-enable",
+          "--enable-metrics": "",
+          "--enable-continuous-cloudwatch-log": "true",
+          "--enable-spark-ui": "true",
+          "--spark-event-logs-path": {
+            "Fn::Sub": "s3://${DataBucket}/spark-logs/"
+          }
+        },
+        "MaxRetries": 1,
+        "Timeout": 60,
+        "GlueVersion": "4.0",
+        "NumberOfWorkers": 2,
+        "WorkerType": "G.1X",
+        "Description": "メンバー情報を最新化するGlueジョブ"
+      }
+    },
+    "MemberInfoUpdateSchedule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${JobName}-schedule"
+        },
+        "Description": "Daily execution of member info update job",
+        "ScheduleExpression": "cron(0 17 * * ? *)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Id": "MemberInfoUpdateTarget",
+            "Arn": {
+              "Fn::Sub": "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/${JobName}"
+            },
+            "RoleArn": {
+              "Fn::GetAtt": ["EventsRole", "Arn"]
+            },
+            "GlueParameters": {
+              "SOURCE_TYPE": "s3",
+              "SOURCE_PATH": {
+                "Fn::Sub": "s3://${DataBucket}/input/members/"
+              },
+              "DESTINATION_TYPE": "s3",
+              "DESTINATION_PATH": {
+                "Fn::Sub": "s3://${DataBucket}/processed/members/"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "EventsRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "GlueJobExecution",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "glue:StartJobRun"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/${JobName}"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "GlueJobName": {
+      "Description": "Name of the created Glue job",
+      "Value": {
+        "Ref": "MemberInfoUpdateJob"
+      }
+    },
+    "GlueServiceRoleArn": {
+      "Description": "ARN of the Glue service role",
+      "Value": {
+        "Fn::GetAtt": ["GlueServiceRole", "Arn"]
+      }
+    },
+    "ScheduleRuleName": {
+      "Description": "Name of the CloudWatch Events rule",
+      "Value": {
+        "Ref": "MemberInfoUpdateSchedule"
+      }
+    }
+  }
+}
